@@ -1,0 +1,24 @@
+# Binaries
+chunk-store
+main
+
+# Go artifacts
+*.log
+
+# Credentials and tokens
+credentials.json
+token.json
+
+# Generated files
+manifest.json
+chunks/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
