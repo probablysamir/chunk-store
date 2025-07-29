@@ -9,39 +9,40 @@ import (
 
 	"github.com/probablysamir/chunk-store/internal/chunker"
 	"github.com/probablysamir/chunk-store/internal/cloudstorage"
+	"github.com/probablysamir/chunk-store/internal/config"
 	"github.com/probablysamir/chunk-store/internal/encryption"
 	"golang.org/x/term"
 )
 
 // parseCloudProviders converts comma-separated provider string to slice
-func parseCloudProviders(providersStr string) []cloudstorage.CloudProvider {
+func parseCloudProviders(providersStr string) []config.CloudProvider {
 	if providersStr == "" {
-		return []cloudstorage.CloudProvider{cloudstorage.GoogleDrive}
+		return []config.CloudProvider{config.GoogleDrive}
 	}
 
 	providerNames := strings.Split(providersStr, ",")
-	var providers []cloudstorage.CloudProvider
+	var providers []config.CloudProvider
 
 	for _, name := range providerNames {
 		name = strings.TrimSpace(name)
 		switch strings.ToLower(name) {
 		case "gdrive", "googledrive", "google-drive":
-			providers = append(providers, cloudstorage.GoogleDrive)
+			providers = append(providers, config.GoogleDrive)
 		case "dropbox":
-			providers = append(providers, cloudstorage.Dropbox)
+			providers = append(providers, config.Dropbox)
 		case "onedrive", "one-drive":
-			providers = append(providers, cloudstorage.OneDrive)
+			providers = append(providers, config.OneDrive)
 		case "mega":
-			providers = append(providers, cloudstorage.MEGACloud)
+			providers = append(providers, config.MEGACloud)
 		case "ipfs":
-			providers = append(providers, cloudstorage.IPFS)
+			providers = append(providers, config.IPFS)
 		default:
 			fmt.Printf("Warning: Unknown provider '%s', ignoring\n", name)
 		}
 	}
 
 	if len(providers) == 0 {
-		providers = []cloudstorage.CloudProvider{cloudstorage.GoogleDrive}
+		providers = []config.CloudProvider{config.GoogleDrive}
 	}
 
 	return providers
@@ -59,9 +60,16 @@ func main() {
 	cloudDownload := flag.Bool("cloud-download", false, "download chunks from cloud for assembly")
 	cloudCleanup := flag.Bool("cloud-cleanup", false, "remove local chunks after successful cloud upload")
 	cloudProviders := flag.String("cloud-providers", "gdrive", "comma-separated list of cloud providers to use (gdrive,dropbox,onedrive,mega,ipfs)")
-	gdriveCredsPath := flag.String("gdrive-creds", "credentials.json", "path to Google Drive credentials file")
-	gdriveTokenPath := flag.String("gdrive-token", "token.json", "path to Google Drive token file")
+	configFile := flag.String("config", "config.json", "path to configuration file")
 	flag.Parse()
+
+	// Load configuration
+	cfg, err := config.LoadConfig(*configFile)
+	if err != nil {
+		log.Printf("Warning: Failed to load config file: %v", err)
+		log.Println("Using default configuration...")
+		cfg = config.DefaultConfig()
+	}
 
 	var encConfig *encryption.EncryptionConfig
 
@@ -73,9 +81,9 @@ func main() {
 		}
 		fmt.Println()
 
-		encConfig = encryption.NewEncryptionConfig(string(password), true)
+		encConfig = encryption.CreateEncryptionConfig(string(password), *encrypt || *decrypt)
 	} else {
-		encConfig = encryption.NewEncryptionConfig("", false)
+		encConfig = encryption.CreateEncryptionConfig("", false)
 	}
 
 	switch *mode {
@@ -84,14 +92,15 @@ func main() {
 			log.Fatal("Cannot use -decrypt flag with split mode")
 		}
 
-		err := chunker.SplitFile(*input, *out, *manifestPath, encConfig)
+		// Use configurable chunk size from config
+		err := chunker.SplitFileWithChunkSize(*input, *out, *manifestPath, encConfig, cfg.ChunkConfig.ChunkSize)
 		if err != nil {
 			log.Fatal("Split failed:", err)
 		}
 		if *encrypt {
-			fmt.Println("File split and encrypted")
+			fmt.Printf("File split and encrypted (chunk size: %.1f MB)\n", float64(cfg.ChunkConfig.ChunkSize)/(1024*1024))
 		} else {
-			fmt.Println("File split successfully")
+			fmt.Printf("File split successfully (chunk size: %.1f MB)\n", float64(cfg.ChunkConfig.ChunkSize)/(1024*1024))
 		}
 
 		// Upload to cloud if requested
@@ -100,17 +109,17 @@ func main() {
 			providers := parseCloudProviders(*cloudProviders)
 			strategy := cloudstorage.CustomCloudStrategy(providers)
 
-			fmt.Printf("Using providers: %v\n", providers)
+		fmt.Printf("Using providers: %v\n", providers)
 
-			uploader, err := cloudstorage.NewCloudUploader(strategy, *gdriveCredsPath, *gdriveTokenPath)
-			if err != nil {
-				log.Fatal("Cloud uploader setup failed:", err)
-			}
+		uploader, err := cloudstorage.CreateCloudUploader(strategy, cfg)
+		if err != nil {
+			log.Fatal("Cloud uploader setup failed:", err)
+		}
 
-			err = uploader.UploadChunks(*out, *manifestPath)
-			if err != nil {
-				log.Fatal("Upload failed:", err)
-			}
+		err = uploader.UploadChunks(*out, *manifestPath)
+		if err != nil {
+			log.Fatal("Upload failed:", err)
+		}
 			fmt.Println("Upload complete!")
 
 			// Clean up local chunks if requested
@@ -133,7 +142,7 @@ func main() {
 			providers := parseCloudProviders(*cloudProviders)
 			strategy := cloudstorage.CustomCloudStrategy(providers)
 
-			uploader, err := cloudstorage.NewCloudUploader(strategy, *gdriveCredsPath, *gdriveTokenPath)
+			uploader, err := cloudstorage.CreateCloudUploader(strategy, cfg)
 			if err != nil {
 				log.Fatal("Cloud setup failed:", err)
 			}
@@ -160,22 +169,26 @@ func main() {
 		fmt.Println("  Assemble: -mode assemble -out output_file [-decrypt] [-cloud-download]")
 		fmt.Println()
 		fmt.Println("Options:")
+		fmt.Println("  -config:          Configuration file path (default: config.json)")
 		fmt.Println("  -encrypt:         Encrypt chunks when splitting")
 		fmt.Println("  -decrypt:         Decrypt chunks when assembling")
 		fmt.Println("  -cloud:           Upload chunks to cloud after splitting")
 		fmt.Println("  -cloud-download:  Download chunks from cloud before assembling")
 		fmt.Println("  -cloud-cleanup:   Remove local chunks after successful cloud upload")
 		fmt.Println("  -cloud-providers: Comma-separated providers (default: gdrive)")
-		fmt.Println("  -gdrive-creds:    Google Drive credentials file")
-		fmt.Println("  -gdrive-token:    Google Drive token file")
+		fmt.Println()
+		fmt.Println("Configuration:")
+		fmt.Println("  Create config.json to customize chunk size, multiple accounts, etc.")
+		fmt.Println("  Use -config flag to specify custom config file location")
 		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  ./chunk-store -mode split -in file.mkv -out chunks -cloud")
+		fmt.Println("  ./chunk-store -mode split -in file.mkv -out chunks -cloud -config my-config.json")
 		fmt.Println("  ./chunk-store -mode split -in file.mkv -out chunks -cloud -cloud-cleanup")
 		fmt.Println("  ./chunk-store -mode assemble -out file.mkv -cloud-download -decrypt")
 		fmt.Println()
 		fmt.Println("Supported providers:")
-		fmt.Println("  ✓ Google Drive")
+		fmt.Println("  ✓ Google Drive (multiple accounts supported)")
 		fmt.Println("  - Dropbox (planned)")
 		fmt.Println("  - OneDrive (planned)")
 		fmt.Println("  - MEGA (planned)")

@@ -24,14 +24,23 @@ type GoogleDriveClient struct {
 	folderID  string
 	tokenFile string
 	credsFile string
+	name      string // Account name for identification
+	folderName string // Custom folder name
 }
 
-// NewGoogleDriveClient creates a new Google Drive client
-func NewGoogleDriveClient(credsFile, tokenFile string) (*GoogleDriveClient, error) {
+// CreateGoogleDriveClient creates a new Google Drive client
+func CreateGoogleDriveClient(credsFile, tokenFile string) (*GoogleDriveClient, error) {
+	return CreateGoogleDriveClientWithName(credsFile, tokenFile, "default", "distributed-chunks")
+}
+
+// CreateGoogleDriveClientWithName creates a new Google Drive client with custom name and folder
+func CreateGoogleDriveClientWithName(credsFile, tokenFile, name, folderName string) (*GoogleDriveClient, error) {
 	return &GoogleDriveClient{
-		credsFile: credsFile,
-		tokenFile: tokenFile,
-		folderID:  "", // Will be set when creating/finding the folder
+		credsFile:  credsFile,
+		tokenFile:  tokenFile,
+		name:       name,
+		folderName: folderName,
+		folderID:   "", // Will be set when creating/finding the folder
 	}, nil
 }
 
@@ -176,7 +185,12 @@ func (gd *GoogleDriveClient) saveToken(token *oauth2.Token) {
 // setupFolder creates or finds the distributed-chunks folder
 func (gd *GoogleDriveClient) setupFolder() error {
 	// Search for existing folder
-	query := "name='distributed-chunks' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+	folderName := gd.folderName
+	if folderName == "" {
+		folderName = "distributed-chunks"
+	}
+	
+	query := fmt.Sprintf("name='%s' and mimeType='application/vnd.google-apps.folder' and trashed=false", folderName)
 	r, err := gd.service.Files.List().Q(query).Do()
 	if err != nil {
 		return fmt.Errorf("can't search for folder: %v", err)
@@ -185,13 +199,14 @@ func (gd *GoogleDriveClient) setupFolder() error {
 	if len(r.Files) > 0 {
 		// Folder exists, use it
 		gd.folderID = r.Files[0].Id
-		fmt.Printf("Using existing Google Drive folder: %s (ID: %s)\n", r.Files[0].Name, gd.folderID)
+		fmt.Printf("Using existing Google Drive folder '%s' for account '%s': %s (ID: %s)\n", 
+			folderName, gd.name, r.Files[0].Name, gd.folderID)
 		return nil
 	}
 
 	// Create new folder
 	folder := &drive.File{
-		Name:     "distributed-chunks",
+		Name:     folderName,
 		MimeType: "application/vnd.google-apps.folder",
 	}
 
@@ -201,7 +216,8 @@ func (gd *GoogleDriveClient) setupFolder() error {
 	}
 
 	gd.folderID = file.Id
-	fmt.Printf("Created Google Drive folder: %s (ID: %s)\n", file.Name, gd.folderID)
+	fmt.Printf("Created Google Drive folder '%s' for account '%s': %s (ID: %s)\n", 
+		folderName, gd.name, file.Name, gd.folderID)
 	return nil
 }
 
@@ -235,8 +251,8 @@ func (gd *GoogleDriveClient) UploadFile(localPath, cloudPath string) (string, er
 		return "", fmt.Errorf("unable to upload file: %v", err)
 	}
 
-	fmt.Printf("Uploaded to Google Drive: %s (ID: %s, Size: %d bytes)\n",
-		res.Name, res.Id, fileInfo.Size())
+	fmt.Printf("Uploaded to Google Drive account '%s': %s (ID: %s, Size: %d bytes)\n",
+		gd.name, res.Name, res.Id, fileInfo.Size())
 
 	return res.Id, nil
 }
@@ -268,7 +284,7 @@ func (gd *GoogleDriveClient) DownloadFile(fileID, localPath string) error {
 		return fmt.Errorf("unable to copy file content: %v", err)
 	}
 
-	fmt.Printf("Downloaded from Google Drive: %s\n", localPath)
+	fmt.Printf("Downloaded from Google Drive account '%s': %s\n", gd.name, localPath)
 	return nil
 }
 

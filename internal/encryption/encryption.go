@@ -15,8 +15,8 @@ type EncryptionConfig struct {
 	Key     []byte
 }
 
-// NewEncryptionConfig creates encryption config from password
-func NewEncryptionConfig(password string, enabled bool) *EncryptionConfig {
+// CreateEncryptionConfig creates encryption config from password
+func CreateEncryptionConfig(password string, enabled bool) *EncryptionConfig {
 	if !enabled {
 		return &EncryptionConfig{Enabled: false}
 	}

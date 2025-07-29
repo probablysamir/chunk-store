@@ -3,18 +3,21 @@ package cloudstorage
 import (
 	"fmt"
 	"path/filepath"
+
+	"github.com/probablysamir/chunk-store/internal/config"
 )
 
-// CloudProvider represents different cloud storage services
-type CloudProvider string
+// CloudProvider type is imported from config package
+type CloudProvider = config.CloudProvider
 
+// Cloud provider constants
 const (
-	GoogleDrive CloudProvider = "gdrive"
-	Dropbox     CloudProvider = "dropbox"
-	OneDrive    CloudProvider = "onedrive"
-	MEGACloud   CloudProvider = "mega"
-	IPFS        CloudProvider = "ipfs"
-	Local       CloudProvider = "local"
+	GoogleDrive = config.GoogleDrive
+	Dropbox     = config.Dropbox
+	OneDrive    = config.OneDrive
+	MEGACloud   = config.MEGACloud
+	IPFS        = config.IPFS
+	Local       = config.Local
 )
 
 // CloudChunkInfo extends chunk info with cloud storage details
@@ -32,9 +35,10 @@ type CloudChunkInfo struct {
 
 // CloudDistributionStrategy defines how to distribute chunks
 type CloudDistributionStrategy struct {
-	Providers        []CloudProvider `json:"providers"`
-	ReplicationCount int             `json:"replication_count"` // How many copies per chunk
-	LoadBalancing    string          `json:"load_balancing"`    // "round_robin", "random", "size_based"
+	Providers           []CloudProvider `json:"providers"`
+	ReplicationCount    int             `json:"replication_count"` // How many copies per chunk
+	LoadBalancing       string          `json:"load_balancing"`    // "round_robin", "random", "size_based"
+	GoogleDriveAccounts int             `json:"google_drive_accounts"` // Number of Google Drive accounts to cycle through
 }
 
 // DefaultCloudStrategy returns a basic distribution strategy
@@ -46,8 +50,9 @@ func DefaultCloudStrategy() CloudDistributionStrategy {
 			OneDrive,
 			MEGACloud,
 		},
-		ReplicationCount: 1,
-		LoadBalancing:    "round_robin",
+		ReplicationCount:    1,
+		LoadBalancing:       "round_robin",
+		GoogleDriveAccounts: 1,
 	}
 }
 
@@ -59,9 +64,24 @@ func CustomCloudStrategy(providers []CloudProvider) CloudDistributionStrategy {
 	}
 	
 	return CloudDistributionStrategy{
-		Providers:        providers,
-		ReplicationCount: 1,
-		LoadBalancing:    "round_robin",
+		Providers:           providers,
+		ReplicationCount:    1,
+		LoadBalancing:       "round_robin",
+		GoogleDriveAccounts: 1,
+	}
+}
+
+// CustomCloudStrategyWithAccounts creates a strategy with specific providers and Google Drive account count
+func CustomCloudStrategyWithAccounts(providers []CloudProvider, gdriveAccounts int) CloudDistributionStrategy {
+	if len(providers) == 0 {
+		providers = []CloudProvider{GoogleDrive}
+	}
+	
+	return CloudDistributionStrategy{
+		Providers:           providers,
+		ReplicationCount:    1,
+		LoadBalancing:       "round_robin",
+		GoogleDriveAccounts: gdriveAccounts,
 	}
 }
 

@@ -6,37 +6,45 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/probablysamir/chunk-store/internal/config"
 	"github.com/probablysamir/chunk-store/internal/manifest"
 	"github.com/schollz/progressbar/v3"
 )
 
 // CloudUploader handles uploading chunks to cloud services
 type CloudUploader struct {
-	Strategy    CloudDistributionStrategy
-	googleDrive *GoogleDriveClient
+	Strategy       CloudDistributionStrategy
+	googleDrives   map[string]*GoogleDriveClient // Map of account name to client
+	config         *config.Config
 }
 
-// NewCloudUploader creates uploader with strategy and credentials
-func NewCloudUploader(strategy CloudDistributionStrategy, credsFile, tokenFile string) (*CloudUploader, error) {
+// CreateCloudUploader creates uploader with configuration
+func CreateCloudUploader(strategy CloudDistributionStrategy, cfg *config.Config) (*CloudUploader, error) {
 	uploader := &CloudUploader{
-		Strategy: strategy,
+		Strategy:     strategy,
+		googleDrives: make(map[string]*GoogleDriveClient),
+		config:       cfg,
 	}
 
-	// Set up Google Drive if needed
-	for _, provider := range strategy.Providers {
-		if provider == GoogleDrive {
-			gdrive, err := NewGoogleDriveClient(credsFile, tokenFile)
+	// Set up Google Drive clients if needed
+	if cfg.HasGoogleDriveProvider() {
+		for _, account := range cfg.GetEnabledGoogleDriveAccounts() {
+			gdrive, err := CreateGoogleDriveClientWithName(
+				account.CredsFile,
+				account.TokenFile,
+				account.Name,
+				account.FolderName,
+			)
 			if err != nil {
-				return nil, fmt.Errorf("failed to create Google Drive client: %w", err)
+				return nil, fmt.Errorf("failed to create Google Drive client for account '%s': %w", account.Name, err)
 			}
 
 			err = gdrive.Initialize()
 			if err != nil {
-				return nil, fmt.Errorf("failed to initialize Google Drive: %w", err)
+				return nil, fmt.Errorf("failed to initialize Google Drive for account '%s': %w", account.Name, err)
 			}
 
-			uploader.googleDrive = gdrive
-			break
+			uploader.googleDrives[account.Name] = gdrive
 		}
 	}
 
@@ -78,14 +86,12 @@ func (cu *CloudUploader) UploadChunks(localChunksDir, manifestPath string) error
 
 			var fileID string
 			var err error
+			var accountName string
 
 			switch provider {
 			case GoogleDrive:
-				if cu.googleDrive != nil {
-					fileID, err = cu.uploadToGoogleDriveWithID(localPath, cloudPath)
-				} else {
-					err = fmt.Errorf("google Drive client not initialized")
-				}
+				// Select Google Drive account based on chunk index
+				accountName, fileID, err = cu.uploadToGoogleDriveMultiAccount(localPath, cloudPath, chunk.Index)
 			case Dropbox:
 				err = fmt.Errorf("dropbox not implemented yet")
 			case OneDrive:
@@ -109,6 +115,10 @@ func (cu *CloudUploader) UploadChunks(localChunksDir, manifestPath string) error
 			// Store file ID if available
 			if fileID != "" {
 				cloudIDs[string(provider)] = fileID
+				// Also store account name for Google Drive
+				if accountName != "" {
+					cloudIDs[string(provider)+"_account"] = accountName
+				}
 			}
 		}
 
@@ -128,17 +138,38 @@ func (cu *CloudUploader) UploadChunks(localChunksDir, manifestPath string) error
 	return manifest.WriteManifestWithMode(m.Chunks, manifestPath, m.OriginalName, m.Encrypted, "cloud")
 }
 
-func (cu *CloudUploader) uploadToGoogleDriveWithID(localPath, cloudPath string) (string, error) {
-	if cu.googleDrive == nil {
-		return "", fmt.Errorf("google Drive not initialized - check credentials")
+// uploadToGoogleDriveMultiAccount uploads to one of the available Google Drive accounts using round-robin
+func (cu *CloudUploader) uploadToGoogleDriveMultiAccount(localPath, cloudPath string, chunkIndex int) (string, string, error) {
+	if len(cu.googleDrives) == 0 {
+		return "", "", fmt.Errorf("no Google Drive clients initialized - check credentials")
 	}
 
-	// Real Google Drive upload
-	fileID, err := cu.googleDrive.UploadFile(localPath, cloudPath)
+	// Get list of account names for round-robin selection
+	var accountNames []string
+	for name := range cu.googleDrives {
+		accountNames = append(accountNames, name)
+	}
+
+	// Select account based on chunk index (round-robin)
+	selectedAccount := accountNames[chunkIndex%len(accountNames)]
+	client := cu.googleDrives[selectedAccount]
+
+	// Upload to the selected account
+	fileID, err := client.UploadFile(localPath, cloudPath)
 	if err != nil {
-		return "", fmt.Errorf("google Drive upload failed: %w", err)
+		return "", "", fmt.Errorf("google Drive upload failed to account '%s': %w", selectedAccount, err)
 	}
 
+	return selectedAccount, fileID, nil
+}
+
+func (cu *CloudUploader) uploadToGoogleDriveWithID(localPath, cloudPath string) (string, error) {
+	// Legacy method for backward compatibility
+	accountName, fileID, err := cu.uploadToGoogleDriveMultiAccount(localPath, cloudPath, 0)
+	if err != nil {
+		return "", err
+	}
+	_ = accountName // Ignore account name in legacy method
 	return fileID, nil
 }
 
@@ -180,17 +211,35 @@ func (cu *CloudUploader) DownloadChunks(manifestPath, downloadDir string) error 
 			var err error
 			switch provider {
 			case GoogleDrive:
-				if cu.googleDrive != nil {
+				if len(cu.googleDrives) > 0 {
+					// Try to get the specific account used for this chunk
+					var targetClient *GoogleDriveClient
+					if chunk.CloudIDs != nil {
+						if accountName, exists := chunk.CloudIDs[string(provider)+"_account"]; exists {
+							if client, found := cu.googleDrives[accountName]; found {
+								targetClient = client
+							}
+						}
+					}
+
+					// If no specific account found, use the first available
+					if targetClient == nil {
+						for _, client := range cu.googleDrives {
+							targetClient = client
+							break
+						}
+					}
+
 					// Use real Google Drive download with file ID
 					if chunk.CloudIDs != nil {
 						if fileID, exists := chunk.CloudIDs[string(provider)]; exists {
-							err = cu.googleDrive.DownloadFile(fileID, localPath)
+							err = targetClient.DownloadFile(fileID, localPath)
 						} else {
 							// Fallback: try to find file by name
 							fileName := filepath.Base(cloudPath)
-							fileID, findErr := cu.googleDrive.FindFileByName(fileName)
+							fileID, findErr := targetClient.FindFileByName(fileName)
 							if findErr == nil {
-								err = cu.googleDrive.DownloadFile(fileID, localPath)
+								err = targetClient.DownloadFile(fileID, localPath)
 							} else {
 								err = findErr
 							}
@@ -198,15 +247,15 @@ func (cu *CloudUploader) DownloadChunks(manifestPath, downloadDir string) error 
 					} else {
 						// Fallback: try to find file by name
 						fileName := filepath.Base(cloudPath)
-						fileID, findErr := cu.googleDrive.FindFileByName(fileName)
+						fileID, findErr := targetClient.FindFileByName(fileName)
 						if findErr == nil {
-							err = cu.googleDrive.DownloadFile(fileID, localPath)
+							err = targetClient.DownloadFile(fileID, localPath)
 						} else {
 							err = findErr
 						}
 					}
 				} else {
-					err = fmt.Errorf("google Drive client not initialized")
+					err = fmt.Errorf("no Google Drive clients initialized")
 				}
 			case Dropbox:
 				err = fmt.Errorf("dropbox not implemented yet")

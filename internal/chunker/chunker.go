@@ -13,9 +13,13 @@ import (
 	"github.com/schollz/progressbar/v3"
 )
 
-const ChunkSize = 1 * 1024 * 1024
+const DefaultChunkSize = 1 * 1024 * 1024
 
 func SplitFile(path, outDir, manifestPath string, encConfig *encryption.EncryptionConfig) error {
+	return SplitFileWithChunkSize(path, outDir, manifestPath, encConfig, DefaultChunkSize)
+}
+
+func SplitFileWithChunkSize(path, outDir, manifestPath string, encConfig *encryption.EncryptionConfig, chunkSize int64) error {
 	inFile, err := os.Open(path)
 	if err != nil {
 		return err
@@ -43,7 +47,7 @@ func SplitFile(path, outDir, manifestPath string, encConfig *encryption.Encrypti
 
 	os.MkdirAll(outDir, 0755)
 	var chunks []manifest.ChunkInfo
-	buf := make([]byte, ChunkSize)
+	buf := make([]byte, chunkSize)
 	index := 0
 
 	for {

@@ -1,0 +1,29 @@
+{
+  "chunk_config": {
+    "chunk_size": 1048576
+  },
+  "cloud_config": {
+    "google_drive_accounts": [
+      {
+        "name": "primary",
+        "creds_file": "credentials.json",
+        "token_file": "token.json",
+        "folder_name": "distributed-chunks",
+        "enabled": true,
+        "description": "Primary Google Drive account"
+      },
+      {
+        "name": "backup",
+        "creds_file": "backup-credentials.json",
+        "token_file": "backup-token.json",
+        "folder_name": "distributed-chunks-backup",
+        "enabled": false,
+        "description": "Backup Google Drive account"
+      }
+    ],
+    "providers": ["gdrive"],
+    "replication_count": 2,
+    "load_balancing": "round_robin"
+  },
+  "version": "1.0"
+}
