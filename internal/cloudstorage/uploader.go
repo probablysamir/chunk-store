@@ -67,7 +67,7 @@ func (cu *CloudUploader) UploadChunks(localChunksDir, manifestPath string) error
 		destinations := cu.Strategy.GetChunkDestination(chunk.Index)
 
 		// Local chunk path
-		localPath := filepath.Join(localChunksDir, chunk.Node, chunk.ID+".chunk")
+		localPath := filepath.Join(localChunksDir, chunk.ID+".chunk")
 
 		var cloudPaths []string
 		var providers []string
@@ -160,10 +160,8 @@ func (cu *CloudUploader) DownloadChunks(manifestPath, downloadDir string) error 
 		}),
 	)
 
-	// Create download directory structure
-	for _, node := range []string{"node1", "node2", "node3"} {
-		os.MkdirAll(filepath.Join(downloadDir, node), 0755)
-	}
+	// Create download directory
+	os.MkdirAll(downloadDir, 0755)
 
 	for _, chunk := range m.Chunks {
 		if len(chunk.CloudPaths) == 0 {
@@ -177,7 +175,7 @@ func (cu *CloudUploader) DownloadChunks(manifestPath, downloadDir string) error 
 			}
 
 			provider := CloudProvider(chunk.Providers[i])
-			localPath := filepath.Join(downloadDir, chunk.Node, chunk.ID+".chunk")
+			localPath := filepath.Join(downloadDir, chunk.ID+".chunk")
 
 			var err error
 			switch provider {
